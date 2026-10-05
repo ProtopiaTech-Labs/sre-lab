@@ -1,0 +1,41 @@
+apiVersion: 1
+groups:
+  - name: payment
+    interval: 1m
+    rules:
+      - uid: payment-failure-ratio
+        title: Payments failing
+        condition: C
+        for: 2m
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # Share of failed Charge calls (payment server spans) over 5 minutes.
+              # "or vector(0)": no error series at all means 0 %, not no data.
+              expr: >-
+                (sum(rate(traces_spanmetrics_calls_total{k8s_namespace_name="${NAMESPACE}", service_name="payment",
+                  span_kind="SPAN_KIND_SERVER", span_name="grpc.oteldemo.PaymentService/Charge", status_code="STATUS_CODE_ERROR"}[5m]))
+                  or vector(0))
+                /
+                sum(rate(traces_spanmetrics_calls_total{k8s_namespace_name="${NAMESPACE}", service_name="payment",
+                  span_kind="SPAN_KIND_SERVER", span_name="grpc.oteldemo.PaymentService/Charge"}[5m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.2] }
+        # No Charge calls in 5 minutes (quiet shop) is not a payment failure.
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: page
+        annotations:
+          summary: "Payments failing in ${NAMESPACE}"
+          description: "{{ humanizePercentage $values.A.Value }} of Charge calls failed over the last 5 minutes (threshold 20 %)."
