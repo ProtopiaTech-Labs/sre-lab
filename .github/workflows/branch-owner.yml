@@ -1,0 +1,35 @@
+name: Branch owner
+
+# Required check (ruleset sre-lab-branches) on pull requests into userN and lab:
+# the author must be the owner of the target branch (repository variable LAB_OWNERS,
+# {"user3": "<github login>", ...}). pull_request_target runs this file from the
+# target branch, so a pull request cannot change the rule it is checked against.
+# Nothing from the pull request is checked out.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+    branches: ["user*", "lab"]
+
+permissions: {}
+
+jobs:
+  branch-owner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Author owns the target branch
+        env:
+          OWNERS: ${{ vars.LAB_OWNERS }}
+          BASE: ${{ github.base_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          owner=$(jq -r --arg b "$BASE" '.[$b] // empty' <<<"${OWNERS:-"{}"}")
+          if [ -z "$owner" ]; then
+            echo "::error::Branch $BASE has no owner — pull requests into it are not accepted."
+            exit 1
+          fi
+          if [ "${owner,,}" != "${AUTHOR,,}" ]; then
+            echo "::error::$BASE belongs to $owner; $AUTHOR can open pull requests only into their own branch."
+            exit 1
+          fi
+          echo "$AUTHOR owns $BASE."
