@@ -28,6 +28,11 @@ default:
       value: "service.name=$(OTEL_SERVICE_NAME),service.namespace={{ .Release.Namespace }},service.version=2.1.3,k8s.namespace.name={{ .Release.Namespace }}"
     - name: PYROSCOPE_SERVER_ADDRESS
       value: "http://pyroscope.monitoring.svc.cluster.local:4040"
+    # Flags change by deploy, which replaces the flagd pod. The flagd providers' cache
+    # is not cleared when that happens (payment kept a changed flag at its old value
+    # until it restarted), so services ask flagd on every evaluation.
+    - name: FLAGD_CACHE
+      value: disabled
 
 components:
   frontend-proxy:
@@ -86,6 +91,8 @@ components:
         value: "flagd"
       - name: FLAGD_PORT
         value: "8013"
+      - name: FLAGD_CACHE
+        value: disabled
       - name: PYROSCOPE_APPLICATION_NAME
         value: "{{ .Release.Namespace }}.ad"
       - name: PYROSCOPE_SERVER_ADDRESS
@@ -230,6 +237,8 @@ components:
         value: flagd
       - name: FLAGD_PORT
         value: "8013"
+      - name: FLAGD_CACHE
+        value: disabled
       - name: GOMEMLIMIT
         value: "180MiB"
       - name: PYROSCOPE_APPLICATION_NAME
