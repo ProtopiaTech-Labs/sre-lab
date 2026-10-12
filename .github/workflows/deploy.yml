@@ -1,0 +1,108 @@
+name: Deploy
+
+# Every branch userN deploys to Kubernetes namespace userN and to Grafana folder
+# Uczestnicy/userN/sre-lab. Its GitHub environment (same name) holds the credentials
+# and can only be used from that branch:
+#   secrets   KUBECONFIG (namespace-scoped), ACR_USERNAME/ACR_PASSWORD (push to
+#             sre-lab/userN/* only), GRAFANA_TOKEN (Edit on the branch's folder only)
+#   variables NAMESPACE, SHOP_URL, ACR_LOGIN_SERVER, GRAFANA_FOLDER_UID
+#
+# Steps: build the services changed relative to the lab baseline (deploy/build.sh),
+# install the chart (deploy/deploy.sh), load dashboards and alert rules
+# (deploy/grafana-sync.sh).
+
+on:
+  push:
+    # userN only: a branch like user3-fix-cart must not deploy (it has no
+    # environment, and GitHub would create a stray one for it).
+    branches: ["user[0-9]", "user[0-9][0-9]"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # The deploy job's environment is chosen by branch name, and GitHub creates an
+  # environment that does not exist yet as soon as a job references it. So the name
+  # is checked in a job without an environment first (also covers workflow_dispatch).
+  branch:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^user[0-9]+$ ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Deploy runs only on branches userN; $GITHUB_REF_NAME is not one."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: branch
+    if: needs.branch.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name }}
+      url: ${{ vars.SHOP_URL }}
+    env:
+      NAMESPACE: ${{ vars.NAMESPACE }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+      GRAFANA_URL: https://grafana.workshop2.indexoutofrange.com
+      GRAFANA_FOLDER_UID: ${{ vars.GRAFANA_FOLDER_UID }}
+      GIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Services changed on this branch
+        run: |
+          git fetch --no-tags origin lab
+          echo "Changed relative to lab: $(deploy/changed-services.sh origin/lab | tr '\n' ' ')"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        env:
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: echo "$ACR_PASSWORD" | docker login "$REGISTRY" -u "$ACR_USERNAME" --password-stdin
+
+      - name: Build changed services
+        run: deploy/build.sh
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+
+      - name: Kubeconfig
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
+          printf '%s' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Install the shop
+        run: deploy/deploy.sh
+
+      - name: Dashboards and alert rules
+        env:
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+        run: deploy/grafana-sync.sh
+
+      - name: Summary
+        run: |
+          {
+            echo "### $NAMESPACE deployed"
+            echo ""
+            echo "- Shop: ${{ vars.SHOP_URL }}"
+            echo "- Commit: \`${GIT_SHA:0:12}\`"
+            echo "- Built from this branch: $(deploy/changed-services.sh origin/lab | tr '\n' ' ')"
+          } >> "$GITHUB_STEP_SUMMARY"
