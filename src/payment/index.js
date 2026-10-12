@@ -1,5 +1,4 @@
 // Copyright The OpenTelemetry Authors
-// sre-lab direct-push test
 // SPDX-License-Identifier: Apache-2.0
 const grpc = require('@grpc/grpc-js')
 const protoLoader = require('@grpc/proto-loader')
